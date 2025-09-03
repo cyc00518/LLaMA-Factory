@@ -143,3 +143,58 @@ class ToolFormatter(Formatter):
     @override
     def extract(self, content: str) -> Union[str, list["FunctionCall"]]:
         return self.tool_utils.tool_extractor(content)
+
+
+THINK_RE = re.compile(r"<think>(.*?)</think>", flags=re.S)
+
+@dataclass
+class ThinkSplitFormatter(Formatter):
+    def apply(self, **kwargs):
+        content = kwargs["content"]
+        m = THINK_RE.search(content)
+        if not m:                      # 無 <think>
+            return [f"<|channel|>final<|message|>{content}"]
+
+        thought = m.group(1).strip()
+        answer = THINK_RE.sub("", content).strip()
+        return [
+            f"<|channel|>analysis<|message|>{thought}<|end|>",
+            f"<|start|>assistant<|channel|>final<|message|>{answer}"
+        ]
+        
+@dataclass
+class CombinedAssistantFormatter(Formatter):
+    _sf: StringFormatter = field(init=False)
+    _tf: ThinkSplitFormatter = field(init=False)
+
+    def __post_init__(self):
+        self._sf = StringFormatter(slots=self.slots)   # 原邏輯
+        self._tf = ThinkSplitFormatter(slots=[])
+
+    def apply(self, **kwargs):
+        if "<think>" in kwargs["content"]:
+            return self._tf.apply(**kwargs)
+        return self._sf.apply(**kwargs)
+
+
+DEFAULT_SYS = (
+    "<|start|>system<|message|>You are ChatGPT, a large language model trained by OpenAI.\nKnowledge cutoff: 2024-06\nCurrent date: 2025-08-07\n\nReasoning: medium\n\n# Valid channels: analysis, commentary, final. Channel must be included for every message.<|end|>"
+)
+
+DEV_PREFIX  = "<|start|>developer<|message|># Instructions\n\n"
+DEV_SUFFIX  = "<|end|>"
+
+@dataclass
+class ConditionalSystemFormatter(Formatter):
+    def apply(self, **kwargs):
+        """If {{content}} is empty → 只輸出 DEFAULT_SYS；否則再加 developer 塊。"""
+        content = (kwargs.get("content") or "").strip()
+        if content == 'get_default':
+             return [DEFAULT_SYS]
+            
+        elif content != 'get_default':
+            return [f"{DEFAULT_SYS}{DEV_PREFIX}{content}{DEV_SUFFIX}"]
+
+        else:
+            return [DEFAULT_SYS]
+

@@ -21,7 +21,7 @@ from typing_extensions import override
 
 from ..extras import logging
 from .data_utils import Role
-from .formatter import EmptyFormatter, FunctionFormatter, StringFormatter, ToolFormatter
+from .formatter import EmptyFormatter, FunctionFormatter, StringFormatter, ToolFormatter, CombinedAssistantFormatter, ConditionalSystemFormatter
 from .mm_plugin import get_mm_plugin
 
 
@@ -1135,6 +1135,17 @@ register_template(
     template_class=ReasoningTemplate,
 )
 
+register_template(
+    name="gpt_think",
+    format_user=StringFormatter(slots=["<|start|>user<|message|>{{content}}<|end|><|start|>assistant"]),
+    format_assistant=CombinedAssistantFormatter(
+        slots=["{{content}}<|end|>"]
+    ),
+    format_system=ConditionalSystemFormatter(slots=[]),
+    efficient_eos=True,
+    # template_class=ReasoningTemplate,
+    default_system="get_default"
+)
 
 register_template(
     name="granite3",
