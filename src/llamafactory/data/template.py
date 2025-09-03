@@ -80,7 +80,27 @@ class Template:
     ) -> list[tuple[list[int], list[int]]]:
         r"""Return multiple pairs of token ids representing prompts and responses respectively."""
         encoded_messages = self._encode(tokenizer, messages, system, tools)
-        return [(encoded_messages[i], encoded_messages[i + 1]) for i in range(0, len(encoded_messages), 2)]
+        
+        # Support parallel tool calls by detecting assistant messages instead of fixed pairing
+        pairs = []
+        last_assistant_idx = -1
+        
+        for i, msg in enumerate(messages):
+            if msg["role"] == "assistant":
+                # Found an assistant message, create a training pair
+                # Context = all messages after the last assistant up to (but not including) this assistant
+                context_ids = []
+                start_idx = last_assistant_idx + 1
+                for j in range(start_idx, i):
+                    context_ids.extend(encoded_messages[j])
+                
+                response_ids = encoded_messages[i]
+                pairs.append((context_ids, response_ids))
+                
+                # Update last assistant index
+                last_assistant_idx = i
+        
+        return pairs
 
     def extract_tool(self, content: str) -> Union[str, list["FunctionCall"]]:
         r"""Extract tool message."""
@@ -436,21 +456,45 @@ class ReasoningTemplate(Template):
     ) -> list[tuple[list[int], list[int]]]:
         messages = deepcopy(messages)
         if self.enable_thinking is False:  # remove all cot
-            for i in range(1, len(messages), 2):
-                messages[i]["content"] = self.remove_thought(messages[i]["content"])
+            for i, msg in enumerate(messages):
+                if msg["role"] == "assistant":
+                    messages[i]["content"] = self.remove_thought(messages[i]["content"])
 
         encoded_messages = self._encode(tokenizer, messages, system, tools)
-        for i in range(0, len(messages), 2):
-            if (
-                self.thought_words[0] not in messages[i + 1]["content"]
-                and self.thought_words[1] not in messages[i + 1]["content"]
-            ):  # add empty cot
-                if not self.enable_thinking:  # do not compute loss
-                    encoded_messages[i] += self.get_thought_word_ids(tokenizer)
-                else:  # do compute loss
-                    encoded_messages[i + 1] = self.get_thought_word_ids(tokenizer) + encoded_messages[i + 1]
-
-        return [(encoded_messages[i], encoded_messages[i + 1]) for i in range(0, len(encoded_messages), 2)]
+        
+        # Support parallel tool calls by detecting assistant messages instead of fixed pairing
+        pairs = []
+        last_assistant_idx = -1
+        
+        for i, msg in enumerate(messages):
+            if msg["role"] == "assistant":
+                # Found an assistant message, create a training pair
+                # Context = all messages after the last assistant up to (but not including) this assistant
+                context_ids = []
+                start_idx = last_assistant_idx + 1
+                for j in range(start_idx, i):
+                    context_ids.extend(encoded_messages[j])
+                
+                response_ids = encoded_messages[i]
+                
+                # Handle thinking words for this assistant message
+                if (
+                    self.thought_words[0] not in messages[i]["content"]
+                    and self.thought_words[1] not in messages[i]["content"]
+                ):  # add empty cot
+                    if not self.enable_thinking:  # do not compute loss
+                        # Add thought tokens to context
+                        context_ids += self.get_thought_word_ids(tokenizer)
+                    else:  # do compute loss
+                        # Add thought tokens to response
+                        response_ids = self.get_thought_word_ids(tokenizer) + response_ids
+                
+                pairs.append((context_ids, response_ids))
+                
+                # Update last assistant index
+                last_assistant_idx = i
+        
+        return pairs
 
 
 TEMPLATES: dict[str, "Template"] = {}

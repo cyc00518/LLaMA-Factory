@@ -141,9 +141,19 @@ class SharegptDatasetConverter(DatasetConverter):
             self.dataset_attr.function_tag: Role.FUNCTION.value,
             self.dataset_attr.system_tag: Role.SYSTEM.value,
         }
-        odd_tags = (self.dataset_attr.user_tag, self.dataset_attr.observation_tag)
-        even_tags = (self.dataset_attr.assistant_tag, self.dataset_attr.function_tag)
-        accept_tags = (odd_tags, even_tags)
+        # Removed strict odd/even tag validation for parallel tool calls support
+        # Allow more flexible message sequences
+        # odd_tags = (self.dataset_attr.user_tag, self.dataset_attr.observation_tag)
+        # even_tags = (self.dataset_attr.assistant_tag, self.dataset_attr.function_tag)
+        # accept_tags = (odd_tags, even_tags)
+        
+        # Define all valid tags for basic validation
+        valid_tags = (
+            self.dataset_attr.user_tag, 
+            self.dataset_attr.assistant_tag, 
+            self.dataset_attr.observation_tag,
+            self.dataset_attr.function_tag
+        )
         messages = example[self.dataset_attr.messages]
         if (
             self.dataset_attr.system_tag
@@ -158,7 +168,8 @@ class SharegptDatasetConverter(DatasetConverter):
         aligned_messages = []
         broken_data = False
         for turn_idx, message in enumerate(messages):
-            if message[self.dataset_attr.role_tag] not in accept_tags[turn_idx % 2]:
+            # Use basic tag validation instead of strict odd/even pattern
+            if message[self.dataset_attr.role_tag] not in valid_tags:
                 logger.warning_rank0(f"Invalid role tag in {messages}.")
                 broken_data = True
                 break
@@ -170,11 +181,12 @@ class SharegptDatasetConverter(DatasetConverter):
                 }
             )
 
-        if (not self.dataset_attr.ranking and len(aligned_messages) % 2 != 0) or (
-            self.dataset_attr.ranking and len(aligned_messages) % 2 == 0
-        ):
-            logger.warning_rank0(f"Invalid message count in {messages}.")
-            broken_data = True
+        # Commented out strict even/odd validation to support parallel tool calls
+        # if (not self.dataset_attr.ranking and len(aligned_messages) % 2 != 0) or (
+        #     self.dataset_attr.ranking and len(aligned_messages) % 2 == 0
+        # ):
+        #     logger.warning_rank0(f"Invalid message count in {messages}.")
+        #     broken_data = True
 
         if broken_data:
             logger.warning_rank0("Skipping this abnormal example.")
@@ -194,8 +206,8 @@ class SharegptDatasetConverter(DatasetConverter):
             chosen = example[self.dataset_attr.chosen]
             rejected = example[self.dataset_attr.rejected]
             if (
-                chosen[self.dataset_attr.role_tag] not in accept_tags[-1]
-                or rejected[self.dataset_attr.role_tag] not in accept_tags[-1]
+                chosen[self.dataset_attr.role_tag] not in valid_tags
+                or rejected[self.dataset_attr.role_tag] not in valid_tags
             ):
                 logger.warning_rank0(f"Invalid role tag in {[chosen, rejected]}.")
                 broken_data = True
