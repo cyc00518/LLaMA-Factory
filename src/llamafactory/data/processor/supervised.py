@@ -39,12 +39,13 @@ class SupervisedDatasetProcessor(DatasetProcessor):
         images: list["ImageInput"],
         videos: list["VideoInput"],
         audios: list["AudioInput"],
-    ) -> tuple[list[int], list[int]]:
+    ) -> tuple[list[int], list[int], int]:
         messages = self.template.mm_plugin.process_messages(prompt + response, images, videos, audios, self.processor)
         input_ids, labels = self.template.mm_plugin.process_token_ids(
             [], [], images, videos, audios, self.tokenizer, self.processor
         )
         encoded_pairs = self.template.encode_multiturn(self.tokenizer, messages, system, tools)
+        raw_total = len(input_ids) + sum(len(s) + len(t) for s, t in encoded_pairs) + (1 if self.template.efficient_eos else 0)
         total_length = len(input_ids) + (1 if self.template.efficient_eos else 0)
         if self.data_args.mask_history:
             encoded_pairs = encoded_pairs[::-1]  # high priority for last turns
@@ -83,12 +84,12 @@ class SupervisedDatasetProcessor(DatasetProcessor):
             input_ids += [self.tokenizer.eos_token_id]
             labels += [self.tokenizer.eos_token_id]
 
-        return input_ids, labels
+        return input_ids, labels, raw_total
 
     def preprocess_dataset(self, examples: dict[str, list[Any]]) -> dict[str, list[Any]]:
         # build inputs with format `<bos> X Y <eos>` and labels with format `<ignore> ... <ignore> Y <eos>`
         # for multiturn examples, we only mask the prompt part in each prompt-response pair.
-        model_inputs = defaultdict(list)
+        model_inputs: dict[str, list[Any]] = {"input_ids": [], "attention_mask": [], "labels": [], "images": [], "videos": [], "audios": []}
         for i in range(len(examples["_prompt"])):
             # if len(examples["_prompt"][i]) % 2 != 1 or len(examples["_response"][i]) != 1:
             #     logger.warning_rank0(
@@ -96,7 +97,7 @@ class SupervisedDatasetProcessor(DatasetProcessor):
             #     )
             #     continue
 
-            input_ids, labels = self._encode_data_example(
+            input_ids, labels, raw_total = self._encode_data_example(
                 prompt=examples["_prompt"][i],
                 response=examples["_response"][i],
                 system=examples["_system"][i],
@@ -105,6 +106,11 @@ class SupervisedDatasetProcessor(DatasetProcessor):
                 videos=examples["_videos"][i] or [],
                 audios=examples["_audios"][i] or [],
             )
+            if raw_total > self.data_args.cutoff_len:
+                logger.warning_rank0(
+                    f"Dropped lengthy example with length {raw_total} > {self.data_args.cutoff_len}."
+                )
+                continue
             model_inputs["input_ids"].append(input_ids)
             model_inputs["attention_mask"].append([1] * len(input_ids))
             model_inputs["labels"].append(labels)
@@ -139,7 +145,7 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
             #     )
             #     continue
 
-            input_ids, labels = self._encode_data_example(
+            input_ids, labels, raw_total = self._encode_data_example(
                 prompt=examples["_prompt"][i],
                 response=examples["_response"][i],
                 system=examples["_system"][i],
@@ -149,8 +155,8 @@ class PackedSupervisedDatasetProcessor(SupervisedDatasetProcessor):
                 audios=examples["_audios"][i] or [],
             )
             length = len(input_ids)
-            if length > self.data_args.cutoff_len:
-                logger.warning_rank0(f"Dropped lengthy example with length {length} > {self.data_args.cutoff_len}.")
+            if raw_total > self.data_args.cutoff_len:
+                logger.warning_rank0(f"Dropped lengthy example with length {raw_total} > {self.data_args.cutoff_len}.")
             else:
                 lengths.append(length)
                 length2indexes[length].append(valid_num)
